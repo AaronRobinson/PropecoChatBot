@@ -10,7 +10,7 @@ Parameters:
 
   SrcBucketPath:
     Type: String
-    Description: Path of source bucket from where fiels need to be copied
+    Description: Path of source bucket from where files need to be copied
     Default: propeco-chatbot/docs/
 
   S3BucketName:
@@ -36,8 +36,47 @@ Parameters:
     Default: arn:aws:iam::466718915578:user/anton.nazaruk
     Description: The Arn of the IAM user (or assumed role) running this CloudFormation template.
     Type: String
+
+  FoundationModel: 
+    Default: anthropic.claude-3-5-sonnet-20240620-v1:0
+    Description: Model id for foundation model used
+    Type: String
+
+  LexS3Bucket:
+    Description: S3 bucket name where the bot's zip file is 
+    Type: String
   
+  LexS3ObjectKey:
+    Description: S3 object key for where the bot's zip file is
+    Type: String
+
 Resources:
+
+  DynamoDBtable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ConversationHistory
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: conversationId
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: conversationId
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      SSESpecification: 
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: Propeco-chatbot
+        - Key: Client
+          Value: Propeco
+        - Key: Owner
+          Value: Babar
+
   S3Bucket:
     Type: AWS::S3::Bucket
     Description: Creating Amazon S3 bucket to hold source data for knowledge base
@@ -314,7 +353,7 @@ Resources:
           Value: Babar
       Name: !Ref AOSSCollectionName
       Type: VECTORSEARCH
-      Description: Collection to holds vector search data
+      Description: Collection to hold vector search data
 
   DataAccessPolicy:
     Type: 'AWS::OpenSearchServerless::AccessPolicy'
@@ -424,7 +463,7 @@ Resources:
         Client: Propeco
         Owner: Babar
       Name: !Ref AOSSCollectionName
-      Description: "Answer based only on information contained in knowledge base."
+      Description: "This is a Q&A chatbot to answer questions that mortgage assessors have for properties."
       RoleArn: !GetAtt AmazonBedrockExecutionRoleForKnowledgeBase.Arn
       KnowledgeBaseConfiguration:
         Type: "VECTOR"
@@ -451,3 +490,184 @@ Resources:
         Type: "S3"
         S3Configuration:
           BucketArn: !GetAtt S3Bucket.Arn
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: HIERARCHICAL
+          HierarchicalChunkingConfiguration:
+            LevelConfigurations: [
+             { MaxTokens: 1500},
+             { MaxTokens: 300}
+            ]
+            OverlapTokens: 60
+
+  AgentResource:
+    Type: AWS::Bedrock::Agent
+    DependsOn: SampleDataSource
+    Properties:
+      Tags:
+        Project: Propeco-chatbot
+        Client: Propeco
+        Owner: Babar
+      AgentName: !Ref AOSSCollectionName
+      AgentResourceRoleArn: !GetAtt AmazonBedrockExecutionRoleForAgentsQA.Arn
+      AutoPrepare: true
+      FoundationModel: !Ref FoundationModel
+      Instruction: "You are a Q&A bot to answer questions about mortgage properties. Answer questions based on data in the knowledge base. Refer to guide.txt only as a reference for field definitions and context of the actual data in the property files. Don't interpet the information in guide.txt as data that should be returned in the response. Use the property.txt files for data. The goal is to retrieve specific details from the relevant property file and answer the user questions with as much detail as possible. Mortgage assessors will be asking you questions about properties and property will be specified by the 'address' field. Use the property file that has that address and return answer based on information only in that particular file."
+      Description: "Q&A bot to answer questions based on mortgage properties."
+      IdleSessionTTLInSeconds: 600
+      KnowledgeBases:
+        - KnowledgeBaseId: !Ref KnowledgeBaseWithAoss
+          Description: "Answer with knowledge base information. This is a knowledge base to answers questions that mortgage assessors have for a bunch of properties."
+          KnowledgeBaseState: ENABLED
+
+  BedrockAgentAlias:
+    Type: AWS::Bedrock::AgentAlias
+    DependsOn: AgentResource
+    Properties:
+      Tags:
+        Project: Propeco-chatbot
+        Client: Propeco
+        Owner: Babar
+      AgentAliasName: Propeco-agent-alias
+      AgentId: !GetAtt AgentResource.AgentId
+
+  LexLambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Tags:
+        - Key: Project
+          Value: Propeco-chatbot
+        - Key: Client
+          Value: Propeco
+        - Key: Owner
+          Value: Babar
+      RoleName: "LexLambdaRole"
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: 
+                - "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: DynamoDBPolicy
+          PolicyDocument: 
+            Version: '2012-10-17'
+            Statement: 
+              - Effect: Allow
+                Action: 
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource: !GetAtt DynamoDBtable.Arn
+        - PolicyName: "BasicExecutionRole"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "logs:CreateLogGroup"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              - Effect: "Allow"
+                Action: 
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: 
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
+        - "arn:aws:iam::aws:policy/AmazonLexFullAccess"
+
+  LexLambdaFunction:
+    Type: "AWS::Serverless::Function"
+    DependsOn: LexLambdaRole
+    Properties:
+      Tags:
+        Project: Propeco-chatbot
+        Client: Propeco
+        Owner: Babar
+      Handler: triggerAgent.lambda_handler
+      Runtime: python3.11
+      Timeout: 30
+      Role: !GetAtt LexLambdaRole.Arn
+      Environment:
+        Variables:
+          AGENT_ID: !GetAtt AgentResource.AgentId
+          ALIAS_ID: !GetAtt BedrockAgentAlias.AgentAliasId
+          TABLE_NAME: !Ref DynamoDBtable
+
+  LexBotRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Tags:
+        - Key: Project
+          Value: Propeco-chatbot
+        - Key: Client
+          Value: Propeco
+        - Key: Owner
+          Value: Babar
+      RoleName: "LexBotRole"
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: 
+                - "lexv2.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: LambdaInvokePolicy
+          PolicyDocument: 
+            Version: '2012-10-17'
+            Statement: 
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: 
+                 - !GetAtt LexLambdaFunction.Arn
+        - PolicyName: CreateLogGroupPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${LexLambdaFunction}:*
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      Action: "lambda:InvokeFunction"
+      Principal: lexv2.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      FunctionName: !Ref LexLambdaFunction
+      SourceArn: !Sub "arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot-alias/*"
+
+  LexBot:
+    Type: "AWS::Lex::Bot"
+    DependsOn: 
+      - LexBotRole
+      - LambdaInvokePermission
+    Properties:
+      Name: propeco-lex-bot
+      Description: Chatbot for Propeco mortgage services
+      IdleSessionTTLInSeconds: 300
+      RoleArn: !GetAtt LexBotRole.Arn
+      BotFileS3Location:
+        S3Bucket: !Ref LexS3Bucket
+        S3ObjectKey: !Ref LexS3ObjectKey
+      DataPrivacy:
+        ChildDirected: false
+      TestBotAliasSettings:
+        BotAliasLocaleSettings:
+          - LocaleId: en_US
+            BotAliasLocaleSetting: 
+              Enabled: true
+              CodeHookSpecification: 
+                LambdaCodeHook:
+                  CodeHookInterfaceVersion: '1.0'
+                  LambdaArn: !GetAtt LexLambdaFunction.Arn
+
+    

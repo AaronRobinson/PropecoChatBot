@@ -3,10 +3,10 @@ version = 0.1
 stack_name = "propeco-stack"
 resolve_s3 = true
 s3_prefix = "propeco-stack"
-region = "eu-west-2"
-profile = "babar-profile"
+region = "eu-central-1"
+profile = "cc-profile"
 confirm_changeset = true
 capabilities = "CAPABILITY_NAMED_IAM"
 disable_rollback = true
-parameter_overrides = "S3SourceBucketName=\"propeco-chatbot-src-bucket-1908\" SrcBucketPath=\"propeco-chatbot/docs/\" S3BucketName=\"propeco-rag-kbb-bucket-2008\" AOSSCollectionName=\"propeco-aoss\" AOSSIndexName=\"propeco-aoss-index\" IAMUserArn=\"arn:aws:iam::466718915578:user/anton.nazaruk\""
+parameter_overrides = "S3SourceBucketName=\"propeco-docs-src-bucket\" SrcBucketPath=\"propeco-chatbot/docs/\" S3BucketName=\"propeco-rag-kb-bucket-0810\" AOSSCollectionName=\"propeco-aoss\" AOSSIndexName=\"propeco-aoss-index\" IAMUserArn=\"arn:aws:iam::010438479336:user/propeco-deployment-user\" FoundationModel=\"anthropic.claude-3-5-sonnet-20240620-v1:0\" LexS3Bucket=\"propeco-docs-src-bucket\" LexS3ObjectKey=\"propeco-chatbot/lex/propeco-lex-bot-DRAFT-SUVVXNQP7Y-LexJson.zip\""
 image_repositories = []

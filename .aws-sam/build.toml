@@ -7,6 +7,6 @@ architecture = "x86_64"
 handler = "index.handler"
 manifest_hash = ""
 packagetype = "Zip"
-functions = ["CreateOpenSearchIndexFunction"]
+functions = ["CreateOpenSearchIndexFunction", "LexLambdaFunction"]
 
 [layer_build_definitions]
